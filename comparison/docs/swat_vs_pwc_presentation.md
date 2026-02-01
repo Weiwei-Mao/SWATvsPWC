@@ -33,20 +33,6 @@ style: |
 
 ---
 
-<!-- _footer: "" -->
-
-# Overview
-
-| Feature | SWAT+ | PWC |
-|---------|-------|-----|
-| **Developer** | USDA-ARS + Texas A&M | US EPA |
-| **Open Source** | Fully open | Partial (from EPA) |
-| **Spatial Scale** | Watershed/HRU | Field/Single Point |
-| **Time Step** | Daily | Sub-daily |
-| **Purpose** | Watershed modeling | Risk assessment |
-
----
-
 <div class="col-container">
 
 <div class="col">
@@ -261,4 +247,4 @@ Note: ✓ = Excellent, △ = Limited, ✗ = Not supported
 
 <br>
 
-### Questions & Discussion
+
