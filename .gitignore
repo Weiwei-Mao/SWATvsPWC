@@ -1,0 +1,30 @@
+# .gitignore for SWATvsPWC project
+
+# Claude Code cache
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Build directories
+build/
+*.o
+*.mod
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*~
+
+# Large data files (keep git repo small)
+*.nc
+*.tif
+*.tiff
