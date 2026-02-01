@@ -1,0 +1,1426 @@
+﻿MODULE initialization
+    IMPLICIT NONE
+    CONTAINS
+
+    SUBROUTINE chemical_manipulations
+        USE constants_and_Variables, ONLY: MolarConvert_aq12_input, MolarConvert_s12_input, &
+                                           MolarConvert_aq23_input, MolarConvert_s23_input, xsoil, nchem, mwt
+        REAL ::   ratio_mwt1, ratio_mwt2
+        ! xsoil, 每降解一摩尔 parent (or daughter) 产生的 daughter (or granddaughter) 摩尔数
+        ! mwt, 摩尔质量 for parent, daughter, and granddaughter
+        !--------------------------------------------------------
+        !As of 1/13/2024 now converting to mass instead of parent equivaLENt
+        IF (nchem >1) THEN
+            ratio_mwt1 = mwt(2)/mwt(1)
+        ELSE
+            ratio_mwt1 = 0.0
+        END IF
+
+        IF (nchem>2) THEN
+            ratio_mwt2 = mwt(3)/mwt(2)
+        ELSE
+            ratio_mwt2 = 0.0
+        END IF
+    !---------------------------------------------
+
+        !SET Soil molar conversions to the same value for all horizons, for both aqueous and sorbed degradation
+        MolarConvert_aq12_input = xsoil(1) * ratio_mwt1
+        MolarConvert_s12_input  = xsoil(1) * ratio_mwt1
+
+        !MolarConvert_aq13_input(i) = not defined in this version
+        !MolarConvert_s13_input(i) = not defined
+
+        MolarConvert_aq23_input = xsoil(2) * ratio_mwt2
+        MolarConvert_s23_input  = xsoil(2) * ratio_mwt2
+    END SUBROUTINE chemical_manipulations
+
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    SUBROUTINE INITL
+    use utilities_1
+    use allocations
+    use constants_and_Variables, ONLY: min_evap_depth,                           &
+        SoilWater,fieldcap_water, wiltpoint_water,delx,                        &
+        theta_zero,                                                            &
+        bd_input,              bulkdensity,                                    &
+        N_f_2_input,           N_freundlich_2,                                 &
+        k_f_2_input,           k_freundlich_2,                                 &
+        k_f_input,             k_freundlich,                                   &
+        N_f_input,             N_freundlich,                                   &
+        fc_input,              theta_fc,                                       &
+        wp_input,              theta_wp,                                       &
+        soil_temp_input,       soil_temp,                                      &
+        theta_sat, juslec,NUSLEC,CN_moisture_ref,RNCMPT,ncom2,                 &
+        old_Henry,new_henry, Henry_unitless,orgcarb, oc_input, NCHEM,NHORIZ,thickness, &
+        OUTPUJ,OUTPJJ,Num_delx,startday, soil_depth,                                   &
+        theta_end,CN_index,cfac,USLEC,                                                 &
+        cn_moist_node, runoff_effic, runoff_decline,runoff_intensity,runoff_extr_depth,&
+        cam123_soil_depth, &
+        CN_moisture_depth,erosion_intensity,erosion_decline,erosion_depth,erosion_effic , erosion_compt, &
+        GYUSLEC,GMUSLEC,GDUSLEC,use_usleyears,number_washoff_nodes, washoff_incorp_depth, &
+        user_irrig_depth_node, UserSpecifiesDepth,user_irrig_depth,   Kd_new ,Kd_old,  &
+        conc_total_per_water, mass_in_compartment, conc_porewater, number_subdelt, subdelt, delt, &
+        Sorbed2, aq_rate_input, sorb_rate_input, gas_rate_input, &
+        dwrate_atRefTemp, dsrate_atRefTemp, dgrate_atRefTemp, dwrate, dsrate, dgrate, &
+        MolarConvert_aq12,MolarConvert_aq13,MolarConvert_aq23,                &
+        MolarConvert_s12, MolarConvert_s13, MolarConvert_s23, &
+        MolarConvert_aq12_input, MolarConvert_aq13_input, MolarConvert_aq23_input, &
+        MolarConvert_s12_input ,MolarConvert_s13_input , MolarConvert_s23_input,  &
+        dispersion_input,dispersion, ainf, GAMMA1, vel, KD_2,  first_year,Min_Evap_node,soil_applied_washoff, &
+        is_koc, AFIELD_ha,  ENPY, Heat_of_Henry, &
+        water_column_rate,benthic_rate, photo_halflife_input, photo_rate, &
+        hydrolysis_rate, hydrolysis_halflife_input,water_column_halflife_input   ,  benthic_halflife_input , soil_degradation_halflife_input, &
+        is_total_degradation,is_constant_profile, is_ramp_profile, ramp1, ramp2, ramp3,is_exp_profile , exp_profile1, exp_profile2, folpst, &
+        top_node_last_horizon, bottom_node_last_horizon, snow, cint, foliar_degrade_loss, SUPFLX, Foliar_volatile_loss, &
+        is_auto_profile, profile_thick, profile_number_increments, number_of_discrete_layers, &
+        aq_rate_corrected,sorb_rate_corrected, gas_rate_corrected,scenario_id,is_hydrolysis_override
+
+
+
+    use waterbody_PARAMETERs, ONLY: afield
+
+    implicit none
+    INTEGER         :: i,j,k,m
+    REAL            :: delx_avg_depth
+    INTEGER         :: startday_doy !  startday day of year  number of days past Jan 1, used for erosion
+    INTEGER         :: day_difference, smallest_difference
+    REAL, PARAMETER :: tol = 0.01  !some kind of tolerance for compartment size, Needs checking
+    INTEGER         :: start, xend
+    REAL            :: running_depth, previous_depth,slope_ramp, value1, value2, value_integrated
+
+
+    REAL :: target_depth(nhoriz)  ! depth of horizons for use with custom discretizartion
+    REAL :: lowerdepth            ! for tracking lower depth of a compartment strandling multipe data horizons
+    INTEGER :: count_straddled	  ! counter for the number of straddled horizons
+    INTEGER :: horiz_indx_tracker(50)
+    REAL :: track_thickness(50)
+
+    REAL :: hydrolyisis_rate_corrected(3)  !soil hydrolysis corrected for implicit function and corrected for per second to per day prent daughter granddaughter
+
+    REAL :: sumofdp
+    REAL :: sumofbd
+    REAL :: sumofmx
+    REAL :: sumofmn
+    REAL :: sumofoc
+    REAL :: sumofsn
+    REAL :: sumofcl
+
+    REAL :: sumoftheta_zero
+    REAL :: sumofdispersion
+    REAL :: sumofsoil_temp
+    REAL :: sumofMolarConvert_aq12
+    REAL :: sumofMolarConvert_aq13
+    REAL :: sumofMolarConvert_aq23
+    REAL :: sumofMolarConvert_s12
+    REAL :: sumofMolarConvert_s13
+    REAL :: sumofMolarConvert_s23
+
+    !moving these to Constants and Variables because they are needed for TPEZ adjustments
+    !REAL :: aq_rate_corrected(3)  !degradation inputs corrected for implicit routine
+    !REAL :: sorb_rate_corrected(3)
+    !REAL :: gas_rate_corrected(3)
+
+    horiz_indx_tracker=0
+    track_thickness = 0.0
+
+    !please move these to chem manipulations, no need to repeat them
+    ! calculate decay rate based on half-life
+    call Convert_halflife_to_rate_per_sec(water_column_halflife_input(1), water_column_rate(1))    ! Water column
+    call Convert_halflife_to_rate_per_sec(water_column_halflife_input(2), water_column_rate(2))
+    call Convert_halflife_to_rate_per_sec(water_column_halflife_input(3), water_column_rate(3))
+    call Convert_halflife_to_rate_per_sec(benthic_halflife_input(1), benthic_rate(1))              ! benthic region
+    call Convert_halflife_to_rate_per_sec(benthic_halflife_input(2), benthic_rate(2))
+    call Convert_halflife_to_rate_per_sec(benthic_halflife_input(3), benthic_rate(3))
+    call Convert_halflife_to_rate_per_sec(photo_halflife_input(1), photo_rate(1))                  ! photolysis
+    call Convert_halflife_to_rate_per_sec(photo_halflife_input(2), photo_rate(2))
+    call Convert_halflife_to_rate_per_sec(photo_halflife_input(3), photo_rate(3))
+    call Convert_halflife_to_rate_per_sec(hydrolysis_halflife_input(1), hydrolysis_rate(1))        ! hydrolysis
+    call Convert_halflife_to_rate_per_sec(hydrolysis_halflife_input(2), hydrolysis_rate(2))
+    call Convert_halflife_to_rate_per_sec(hydrolysis_halflife_input(3), hydrolysis_rate(3))
+    call Convert_halflife_to_rate_per_day(soil_degradation_halflife_input(1), aq_rate_input(1))    ! soil degradation
+    call Convert_halflife_to_rate_per_day(soil_degradation_halflife_input(2), aq_rate_input(2))
+    call Convert_halflife_to_rate_per_day(soil_degradation_halflife_input(3), aq_rate_input(3))
+
+    snow = 0.0
+    cint = 0.0
+
+    folpst = 0.0
+    foliar_degrade_loss = 0.0
+    SUPFLX = 0.0
+    Foliar_volatile_loss = 0.0
+
+    if (is_total_degradation) THEN
+        sorb_rate_input = aq_rate_input
+        gas_rate_input= 0.0
+    else               !Aqueous phase only
+        sorb_rate_input = 0.0
+        gas_rate_input= 0.0
+    END IF
+
+    !For sub delt calculations
+    subdelt = delt/number_subdelt  ! delt = 1.0, definition
+
+    AFIELD_ha = AFIELD/10000.      ! m2 to ha
+
+    ! convert enthalpy from Joules to Kcal for PRZM  4184 J/kcal   parent, daughter, granddaughter
+    ENPY = Heat_of_Henry/ 4184.0
+
+    !********Allocations of Soil Profile Variables**********************
+
+    if (is_auto_profile) THEN
+        ncom2 = sum(profile_number_increments(1:number_of_discrete_layers))  !New way
+    else
+        NCOM2 = sum(num_delx(1:nhoriz))  !Total Number of Compartments (layers)       !old way
+    END IF
+
+    !***********  allocate and initialize ***********
+    call  allocate_soil_compartments     ! Allocation based on the number of layers
+
+    call  allocate_time_series       !some time series also have soil components, so ncom2 must be defined previoyusly before this call
+
+
+    ainf = 0.0
+    GAMMA1  = 0.0
+    vel = 0.0
+    !************************************************
+
+    if (is_auto_profile) THEN  ! create the discretization based on input profile instead of delx
+
+        !get thicknesses for each compartment
+        start = 1
+        xend = 0
+        do i = 1, number_of_discrete_layers
+            xend = xend + profile_number_increments(i)
+            do j = start, xend
+                delx(j)  = profile_thick(i)/ REAL(profile_number_increments(i))
+            END DO
+            start =xend +1
+        END DO
+
+        !*** Populate Soil Depth Vector *********
+        soil_depth = 0.0
+        soil_depth(1) = delx(1)
+
+        do i=2, NCOM2
+            soil_depth(i) = soil_depth(i-1) + delx(i)
+        END DO
+
+        !Find depths of input horizons these are "target depths" where changes occur
+        target_depth(1) = thickness(1)
+        do i=2, nhoriz
+            target_depth(i) =target_depth(i-1) + thickness(i)
+        END DO
+
+        bulkdensity   = 0.0
+        orgcarb       = 0.0
+        theta_fc      = 0.0
+        theta_wp      = 0.0
+        theta_zero    = 0.0
+        dispersion 	  = 0.0
+        soil_temp     = 0.0
+
+        j = 1  ! tracker for data horizons
+        do i = 1, ncom2   !check each fixed compartment depth against the horizon depth to determine its location
+
+            if (soil_depth(i) <= target_depth(j)) THEN
+
+                bulkdensity(i)       = bd_input  (j)
+                orgcarb    (i)       = oc_input  (j)
+                theta_fc   (i)       = fc_input  (j)
+                theta_wp   (i)       = wp_input  (j)
+                !  theta_zero (i)       = fc_input  (j)  !Set the iniitial Water content to field capacity
+                dispersion (i)		  = dispersion_input(j)
+                soil_temp  (i)       = soil_temp_input (j)
+
+                MolarConvert_aq12(i) = MolarConvert_aq12_input(j)
+                MolarConvert_aq13(i) = MolarConvert_aq13_input(j)
+                MolarConvert_aq23(i) = MolarConvert_aq23_input(j)
+                MolarConvert_s12 (i) = MolarConvert_s12_input(j)
+                MolarConvert_s13 (i) = MolarConvert_s13_input(j)
+                MolarConvert_s23 (i) = MolarConvert_s23_input(j)
+            else !compartment depth is greater than horizon
+
+
+                lowerdepth = soil_depth(i-1)  !capture the lower depth of the compartment that straddles
+
+                if ( lowerdepth >= target_depth(nhoriz)) THEN  !we've run out of horizons, so every thing is the last horizon
+                    bulkdensity(i) = bd_input  (nhoriz)
+                    theta_fc   (i) = fc_input  (nhoriz)
+                    theta_wp   (i) = wp_input  (nhoriz)
+                    orgcarb    (i) = 0.0                  ! oc_input %  (nhoriz)
+                    !      theta_zero (i) = fc_input(nhoriz)
+                    dispersion (i)	= dispersion_input(nhoriz)
+                    soil_temp  (i) = soil_temp_input (nhoriz)
+
+                    MolarConvert_aq12(i) = MolarConvert_aq12_input(nhoriz)
+                    MolarConvert_aq13(i) = MolarConvert_aq13_input(nhoriz)
+                    MolarConvert_aq23(i) = MolarConvert_aq23_input(nhoriz)
+                    MolarConvert_s12 (i)  = MolarConvert_s12_input(nhoriz)
+                    MolarConvert_s13 (i)  = MolarConvert_s13_input(nhoriz)
+                    MolarConvert_s23 (i)  = MolarConvert_s23_input(nhoriz)
+
+                else
+
+                    !find out how many data horizons this compartment straddles (typically will be 2, but keep possibilitiy open for many)
+                    count_straddled = 0
+                    do k= j, nhoriz
+                        count_straddled = count_straddled +1
+                        horiz_indx_tracker(count_straddled) = k
+
+                        if (soil_depth(i) > target_depth(k)) THEN
+                            track_thickness(count_straddled) = target_depth(k)-lowerdepth
+                            lowerdepth = target_depth(k)
+                        else
+                            track_thickness(count_straddled) = soil_depth(i) - target_depth(k-1)
+                            j = j + count_straddled -1
+                            exit
+                        END IF
+                    END DO
+
+                    !Do Averaging
+                    sumofdp =  0.0
+                    sumofbd =  0.0
+                    sumofmx =  0.0
+                    sumofmn =  0.0
+                    sumofoc =  0.0
+                    sumofsn =  0.0
+                    sumofcl =  0.0
+
+                    !     sumoftheta_zero        = 0.0
+                    sumofdispersion        = 0.0
+                    sumofsoil_temp         = 0.0
+                    sumofMolarConvert_aq12 = 0.0
+                    sumofMolarConvert_aq13 = 0.0
+                    sumofMolarConvert_aq23 = 0.0
+                    sumofMolarConvert_s12  = 0.0
+                    sumofMolarConvert_s13  = 0.0
+                    sumofMolarConvert_s23  = 0.0
+
+                    do m = 1, count_straddled
+                        sumofdp = sumofdp + track_thickness(m)
+                        sumofbd = sumofbd + bd_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofmx = sumofmx + fc_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofmn = sumofmn + wp_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofoc = sumofoc + oc_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        !      sumoftheta_zero          =sumoftheta_zero          +  fc_input                 (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofdispersion          =sumofdispersion          +  dispersion_input         (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofsoil_temp           =sumofsoil_temp           +  soil_temp_input          (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_aq12   =sumofMolarConvert_aq12   +   MolarConvert_aq12_input (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_aq13   =sumofMolarConvert_aq13   +   MolarConvert_aq13_input (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_aq23   =sumofMolarConvert_aq23   +   MolarConvert_aq23_input (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_s12    =sumofMolarConvert_s12    +   MolarConvert_s12_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_s13    =sumofMolarConvert_s13    +   MolarConvert_s13_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+                        sumofMolarConvert_s23    =sumofMolarConvert_s23    +   MolarConvert_s23_input  (horiz_indx_tracker(m)) *   track_thickness(m)
+
+                    END DO
+                    bulkdensity(i) = sumofbd /sumofdp
+                    theta_fc   (i) = sumofmx /sumofdp
+                    theta_wp   (i) = sumofmn /sumofdp
+                    orgcarb    (i) = sumofoc /sumofdp
+
+                    !    theta_zero       (i) =sumoftheta_zero          /sumofdp
+                    dispersion       (i) =sumofdispersion          /sumofdp
+                    soil_temp        (i) =sumofsoil_temp           /sumofdp
+                    MolarConvert_aq12(i) = sumofMolarConvert_aq12  /sumofdp
+                    MolarConvert_aq13(i) = sumofMolarConvert_aq13  /sumofdp
+                    MolarConvert_aq23(i) = sumofMolarConvert_aq23  /sumofdp
+                    MolarConvert_s12 (i) = sumofMolarConvert_s12   /sumofdp
+                    MolarConvert_s13 (i) = sumofMolarConvert_s13   /sumofdp
+                    MolarConvert_s23 (i) = sumofMolarConvert_s23   /sumofdp
+                endif
+            END IF
+        END DO
+
+
+
+        !saturate last 2 compartments to simulate aquifer
+
+        theta_fc(ncom2-1) = 1.0 - bulkdensity(ncom2-1)/2.65
+        theta_fc(ncom2)   = 1.0 - bulkdensity(ncom2)/2.65
+
+        theta_zero = theta_fc  !initialize water = field capacity
+
+    else 	!No auto discretization  START OF  OLD WAY -- Possibly eliminate
+
+        ! *** Populate the Delx Vector and Kf & N *******
+        start = 1
+        Xend  = 0
+        do i=1, nhoriz
+            xend = start +num_delx(i)-1
+            delx(start:xend)           = thickness(i)/num_delx(i)
+            bulkdensity(start:xend)    = bd_input(i)
+
+            orgcarb(start:xend)        = oc_input(i)
+
+            theta_fc(start:xend)       = fc_input(i)
+            theta_wp(start:xend)       = wp_input(i)
+
+            dispersion(start:xend)     = dispersion_input(i)
+
+            theta_zero(start:xend)     = fc_input(i)  !Set the iniitial Water content to field capacity
+            soil_temp(start:xend)      = soil_temp_input(i)
+
+            MolarConvert_aq12(start:xend)  = MolarConvert_aq12_input(i)
+            MolarConvert_aq13(start:xend)  = MolarConvert_aq13_input(i)
+            MolarConvert_aq23(start:xend)  = MolarConvert_aq23_input(i)
+            MolarConvert_s12(start:xend)   = MolarConvert_s12_input(i)
+            MolarConvert_s13(start:xend)   = MolarConvert_s13_input(i)
+            MolarConvert_s23(start:xend)   = MolarConvert_s23_input(i)
+
+            !do K=1, NCHEM
+            !    if (is_koc) THEN
+            !        k_freundlich(k, start:xend)   = k_f_input(k)*oc_input(i)*.01  !oc is in percent
+            !        k_freundlich_2(k, start:xend) = k_f_2_input(k)*oc_input(i)*.01
+            !    else
+            !        k_freundlich(k, start:xend)   = k_f_input(k)
+            !        k_freundlich_2(k, start:xend) = k_f_2_input(k)
+            !    END IF
+            !
+            !    N_freundlich(k, start:xend) = N_f_input(k)
+            !    N_freundlich_2(k, start:xend) = N_f_2_input(k)
+            !    !KD(k, start:xend)= k_f_input(k,i)                !Used in Freundlich linearization for tridiagonal
+            !
+            !  !NEED TO COMMENT OUT THESE LINES after done below
+            !  !  dwrate_atRefTemp(k,start:xend) =     aq_rate_input(K)
+            !  !  dsrate_atRefTemp(k,start:xend) =     sorb_rate_input(K)
+            !  !  dgrate_atRefTemp(k,start:xend) =     gas_rate_input(K)
+            !  !  **************************************************
+            !
+            !END DO
+            start = xend+1
+
+        END DO
+
+        !*** Populate Soil Depth Vector *********
+        soil_depth = 0.0
+        soil_depth(1) = delx(1)
+
+        do i=2, NCOM2
+            soil_depth(i) = soil_depth(i-1) + delx(i)   ! this array is accumulate array, from top
+        END DO
+        !&&&&&&&&&&&&&&&&&&&&&&&&&&& END OF  OLD WAY &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+    END IF
+
+
+
+    !****** Calculate Kd for each compartment ******************************
+    do K=1, NCHEM
+        do i = 1, ncom2
+            if (is_koc) THEN  ! Koc, 
+                k_freundlich(k, i)   = k_f_input(k)  * orgcarb(i) * .01  !oc is in percent
+                k_freundlich_2(k, i) = k_f_2_input(k)* orgcarb(i) * .01
+            else
+                k_freundlich(k,i)   = k_f_input(k)                       ! coefficient
+                k_freundlich_2(k,i) = k_f_2_input(k)
+            END IF
+
+            N_freundlich(k, i) = N_f_input(k)                            ! exponent
+            N_freundlich_2(k, i) = N_f_2_input(k)
+        END DO
+
+    END DO
+
+
+    !Find index of last 2 nodes, this will be used for groundwater calculations
+    top_node_last_horizon    = ncom2-1
+    bottom_node_last_horizon = ncom2
+
+    !Implicit routine corection for degradation: insures perfect degradation at high rates  for the case
+    !where sorbed and aqueous degradation are equal
+    !may cause problems however when comparing aqueous and bulk degradation. in such cases would need
+    !to make retardation factor adjustment as well. The proper correction would first calulate the overall
+    !rate including retardation and THEN make the correction
+    !these corrections would only work if aq and sorbed were equal or if one were zero
+
+    !aq_rate_corrected =     exp(aq_rate_input)   -1.
+    !sorb_rate_corrected =   exp(sorb_rate_input) -1.
+    !gas_rate_corrected =    exp(gas_rate_input)  -1.
+    !hydrolyisis_rate_corrected = exp(hydrolysis_rate*86400.)-1  !hydrolysis rate is per second, parent, daughter, grand
+
+    !changed to no corrections, cuz they are not generally true  11/12/2024
+
+    aq_rate_corrected =     aq_rate_input
+    sorb_rate_corrected =   sorb_rate_input
+    gas_rate_corrected =    gas_rate_input
+
+    hydrolyisis_rate_corrected = hydrolysis_rate*86400. !hydrolysis rate is per second, parent, daughter, grand
+
+
+
+
+
+
+    !******************************************************************************************
+    !
+    ! changed---put these corrected values as substitute for input values below,
+    !done as of 12-4-2022  but check
+    !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    do k = 1, nchem
+        previous_depth = 0.0
+        running_depth  = 0.0
+
+        if (is_ramp_profile) THEN
+            ! PARAMETERs ramp1 is first plateau distance, ramp2 is second plateau distance, ramp3 is second plateau value
+            slope_ramp = (ramp3-1.0)/(ramp2-ramp1)
+
+            do i = 1, ncom2
+                running_depth   = running_depth +delx(i)
+                if (running_depth <= ramp1) THEN                                      !cell is totally in first plateau
+                    dwrate_atRefTemp(k,i) =  aq_rate_corrected(K)
+                    dsrate_atRefTemp(k,i) =  sorb_rate_corrected(K)
+                    dgrate_atRefTemp(k,i) =  gas_rate_corrected(K)
+
+                ELSE IF (previous_depth < ramp1 .AND. running_depth > ramp1 )THEN     !cell staddles corner of first plateau
+                    value1 = (ramp1-previous_depth)  !*1.0
+                    value2 = (running_depth-ramp1)* (0.5*slope_ramp*(running_depth-ramp1) + 1.0 )
+                    value_integrated = (value1 + value2)/ delx(i)
+
+                    dwrate_atRefTemp(k,i) =  value_integrated * aq_rate_corrected(K)
+                    dsrate_atRefTemp(k,i) =  value_integrated * sorb_rate_corrected(K)
+                    dgrate_atRefTemp(k,i) =  value_integrated * gas_rate_corrected(K)
+
+                ELSE IF (previous_depth >= ramp1 .AND. running_depth <= ramp2 )THEN   !cell is completely on the ramp
+                    value1 = slope_ramp*(previous_depth-ramp1) + 1   ! y=mx+b
+                    value2 = slope_ramp*(running_depth-ramp1) + 1
+                    value_integrated = 0.5 * (value1 + value2)
+
+                    dwrate_atRefTemp(k,i) =   value_integrated * aq_rate_corrected(K)
+                    dsrate_atRefTemp(k,i) =   value_integrated * sorb_rate_corrected(K)
+                    dgrate_atRefTemp(k,i) =   value_integrated * gas_rate_corrected(K)
+
+                ELSE IF (previous_depth <  ramp2 .AND. running_depth > ramp2 )THEN    !cell straddles corner of second plateau
+                    value1 = (running_depth-ramp2)*ramp3
+                    value2 = (ramp2-previous_depth)*0.5 *((previous_depth-ramp1)* slope_ramp +1.0 + ramp3 )
+                    value_integrated = (value1 + value2)/delx(i)
+
+                    dwrate_atRefTemp(k,i) =  value_integrated * aq_rate_corrected(K)
+                    dsrate_atRefTemp(k,i) =  value_integrated * sorb_rate_corrected(K)
+                    dgrate_atRefTemp(k,i) =  value_integrated * gas_rate_corrected(K)
+
+                ELSE IF (previous_depth >= ramp2 )THEN    !cell is completely in second plateau
+                    dwrate_atRefTemp(k,i) =  ramp3 * aq_rate_corrected(K)
+                    dsrate_atRefTemp(k,i) =  ramp3 * sorb_rate_corrected(K)
+                    dgrate_atRefTemp(k,i) =  ramp3 * gas_rate_corrected(K)
+                else
+                    WRITE(*,*) "message to developer: check degradation ramp logic"  !This should not happen
+                END IF
+                previous_depth = running_depth
+            END DO
+
+        ELSE IF (is_exp_profile) THEN
+            do i = 1, ncom2
+                running_depth   = running_depth +delx(i)
+                value1 = (1-exp_profile2)/(-exp_profile1)*exp(-exp_profile1*previous_depth) + exp_profile2*previous_depth
+                value2 = (1-exp_profile2)/(-exp_profile1)*exp(-exp_profile1*running_depth) + exp_profile2*running_depth
+                value_integrated = (value2-value1)/delx(i)
+
+                dwrate_atRefTemp(k,i) =  value_integrated * aq_rate_corrected(K)
+                dsrate_atRefTemp(k,i) =  value_integrated * sorb_rate_corrected(K)
+                dgrate_atRefTemp(k,i) =  value_integrated * gas_rate_corrected(K)
+
+                previous_depth = running_depth
+            END DO
+
+
+        else  !is_constant_profile
+            do i = 1, ncom2
+                dwrate_atRefTemp(k,i) =  aq_rate_corrected(K)
+                dsrate_atRefTemp(k,i) =  sorb_rate_corrected(K)
+                dgrate_atRefTemp(k,i) =  gas_rate_corrected(K)
+
+            END DO
+        END IF
+
+        !Hydrolysis Overide where aq rate is less than hydrolysis, use hydrolysis
+        if (is_hydrolysis_override) THEN
+            where (dwrate_atRefTemp(k,:) < hydrolyisis_rate_corrected(k)  )
+                dwrate_atRefTemp(k,:) = hydrolyisis_rate_corrected(k)
+            end where
+        END IF
+
+
+        !do i = 1, ncom2
+        !    WRITE(93,*) i, dwrate_atRefTemp(k,i), dsrate_atRefTemp(k,i)
+        !END DO
+        !
+
+    END DO  !chemical species loop
+
+
+
+
+
+
+    !WRITE (*,'(A)')   '    #     depth     bd       max_water     min_wat    orgcarb         kd         dwrate'
+    !do i = 1, ncom2
+    !   WRITE (*,'(I5,1X, F9.2, 8G12.3)') i,soil_depth(i), bulkdensity(i),theta_fc(i), theta_wp(i), orgcarb(i),  k_freundlich(1,i),dwrate_atRefTemp(1,i)
+    !END DO
+
+    !As a default set the degradation rate to equal the input values
+    dwrate = dwrate_atRefTemp
+    dsrate = dsrate_atRefTemp
+    dgrate = dgrate_atRefTemp
+
+    theta_sat = 1.0 - bulkdensity/2.65
+    if (any(theta_fc > theta_sat)) THEN
+        WRITE(*,* ) scenario_id, 'water capacity exceeds saturation; assuming no user error'
+    END IF
+
+    !If Linear Isotherms are used the READing Freundlich coefficient are used as Kd
+    Kd_new  = k_freundlich   !used for Freundlich routines in tridiagonal
+    Kd_old  = k_freundlich
+
+    KD_2   = k_freundlich_2
+
+    soil_applied_washoff  = 0.0
+    conc_total_per_water = 0.0
+    mass_in_compartment = 0.0
+
+    conc_porewater = 0.0
+    Sorbed2 = 0.0   !nonequilibrium phase concentration
+
+
+
+    !*** Calculate Runoff Depth   ****************
+
+    cn_moist_node = find_depth_node(ncom2,soil_depth,CN_moisture_depth)   ! CN_moisture_depth=10, from definition
+
+    !*** Find the node for the  min_evap_depth (formerly) ANETD***************
+
+
+    Min_Evap_node =  find_depth_node(ncom2,soil_depth,min_evap_depth)     ! min_evap_depth, from scn2 input file
+
+    !Find the node for user-specified irrigation depth
+    If (UserSpecifiesDepth) THEN
+        user_irrig_depth_node =  find_depth_node(ncom2,soil_depth,user_irrig_depth)  ! user_irrig_depth, from scn2 input file
+    END IF
+
+    !initialize the water content in the profile to the THETO (previously initailized in SUBROUTINE INIACC)
+    theta_end = theta_zero
+
+
+    OUTPUJ=0.0   !output accumulators, only used in output, could be initialzed with save attribute there
+    OUTPJJ=0.0
+
+    !initializehenry's law constant for first time here
+    !These will also be the values used when temperature is not used
+    do K = 1, NCHEM
+        old_Henry(K,:) = Henry_unitless(K)
+        new_henry(K,:) = Henry_unitless(K)
+    END DO
+
+    !Setup  Crop Growth
+    Call setup_crops
+
+    !**** Initialization of Curve Number and Erosion PARAMETERs*****
+    if (use_usleyears) THEN  !Erosion PARAMETERs and Curve Numbers are Year Specific
+        CN_index = 1
+        !For case 1, JUSLEC is referenced to Jan 1, 1900
+        do I=1,NUSLEC
+            JUSLEC(I)= jd(GYUSLEC(I),GMUSLEC(I),GDUSLEC(I))
+        END DO
+
+        smallest_difference = 1e6
+        do i= 1,NUSLEC
+            day_difference =  abs(startday - JUSLEC(i))
+            if (day_difference < smallest_difference) THEN
+                smallest_difference = day_difference
+                CN_index = i   !This sets the index for initial CN and erosion PARAMETERs
+            END IF
+        END DO
+
+
+    else  !Erosion PARAMETERs and Curve Numbers  repeat every year
+        !For default case JUSLEC is referenced to the Jan 1 of any year
+        startday_doy = startday - jd(first_year,1,1)+1
+
+        do I=1,NUSLEC
+            JUSLEC(I)= jd(1,GMUSLEC(I),GDUSLEC(I)) -jd(1,1,1) +1
+        END DO
+        smallest_difference = 1000
+        do i= 1,NUSLEC
+
+            if (JUSLEC(i) > startday_doy) THEN
+                day_difference =  startday_doy - (JUSLEC(i)-365)
+            else
+                day_difference =  startday_doy - JUSLEC(i)
+            END IF
+
+            if (day_difference < smallest_difference) THEN
+                smallest_difference = day_difference
+                CN_index = i   !This sets the index for initial CN and erosion PARAMETERs
+            END IF
+
+        enddo
+    END IF
+
+    cfac = USLEC(CN_index)
+
+    !****************************************
+    !Calculate Average Soil moisture in moisture zone (spec'd as a PARAMETER)
+    !altered on 8/24/17 to average over depth rather than nodes so that it is consitent
+    !when used to compared to actual soil moisture in HYDROLGY routine
+
+    CN_moisture_ref  = 0.0
+
+    do I=1,cn_moist_node
+        CN_moisture_ref = CN_moisture_ref + 0.5*(theta_fc(I)+theta_wp(I))*delx(i)
+    END DO
+
+    CN_moisture_ref = CN_moisture_ref /soil_depth(cn_moist_node)
+
+    !***********************************************************
+    soilwater       = theta_zero*DELX
+    fieldcap_water  = theta_fc*  DELX
+    wiltpoint_water = theta_wp*  DELX
+
+
+    !!***  Find the Maximum Root Node **********
+    !rzd = maxval(max_root_depth(1:num_crops))
+    !
+    !NCOMRZ = find_depth_node(ncom2,soil_depth,rzd)
+
+    !Calculate number of compartments which make upwashoff incorporation
+
+    ! from definition, 2.0, depth at which foliar washoff pesticide is incorporated into soil
+    number_washoff_nodes =  find_depth_node(ncom2,soil_depth,washoff_incorp_depth)
+
+    !*** EXTRACTION of RUNOFF AND EROSION FROM SOIL ****************************
+    !** Runoff Extraction Intensity
+    RNCMPT =  find_depth_node(ncom2,soil_depth,runoff_extr_depth) ! Calculate number of compartments which make up runoff, scn2 input
+    runoff_intensity=0.0
+
+    if (runoff_decline > 0.0001) THEN
+        do I=1,RNCMPT
+            delx_avg_depth =  soil_depth(i) - DELX(I)/2.
+            runoff_intensity(I)=runoff_effic*runoff_decline/(1-exp(-runoff_decline*runoff_extr_depth))*exp(-runoff_decline*delx_avg_depth)
+        END DO
+    else
+        runoff_intensity(1:rncmpt)=runoff_effic/runoff_extr_depth
+    END IF
+
+    !** Erosion Extraction Intensity
+
+    erosion_compt =  find_depth_node(ncom2,soil_depth,erosion_depth) !Calculate number of compartments which make up runoff
+    erosion_intensity=0.0
+
+    !Using soil_depth(erosion_compt) instead of erosion_depth to prevent
+    !some glitchy things like when depths are less than delx
+
+    if (erosion_decline > 0.0001) THEN
+        do i=1,erosion_compt
+            delx_avg_depth =  soil_depth(i) - DELX(I)/2.
+            erosion_intensity(i)= erosion_effic*erosion_decline/(1.0-exp(-erosion_decline*soil_depth(erosion_compt))) &
+                *exp(-erosion_decline*delx_avg_depth)
+        END DO
+    else !essentially no decline uniform extraction
+        !need to limit this when depth is less than compartment !!!!!!
+        !perhaps set it to the nodes
+        !fixed it with erosion_numerical_depth
+        erosion_intensity(1:erosion_compt) = erosion_effic/soil_depth(erosion_compt)
+    END IF
+
+    call SetupApplications
+
+    call calculate_retardation_factor !keep before setupfield
+    call SetupFieldOutputOptions
+
+
+    end subroutine INITL
+
+
+
+
+
+
+    !**********************************************************************
+
+
+    Subroutine Convert_halflife_to_rate_per_sec(halflife, rate)
+    ! half-life = ln(2) / Decay rate, therefore,
+    ! Decay rate = ln(2) / half-life
+
+    REAL, intent(in):: halflife
+    REAL,intent(out):: rate
+    !converts halflives in Days to rate in Per Sec
+    !assume that an entry of zero half life means No degradation or zero rate
+
+
+    If (halflife < tiny(halflife)) THEN
+        rate = 0.0
+    else
+        rate  = (8.022536812e-6)/halflife        ! 0.693147180559  /( halflife *86400)
+    END IF
+    end subroutine Convert_halflife_to_rate_per_sec
+    !**********************************************************************
+    Subroutine Convert_halflife_to_rate_per_day(halflife, rate)
+    REAL, intent(in):: halflife
+    REAL, intent(out):: rate
+    !converts halflives in Days to rate in Per Sec
+    !assume that an entry of zero half life means No degradation or zero rate
+
+    If (halflife < tiny(halflife)) THEN
+        rate = 0.0
+    else
+        rate  = 0.693147180559/halflife
+    endif
+
+    end subroutine Convert_halflife_to_rate_per_day
+    !**********************************************************************
+
+    subroutine SetupApplications
+    !Gets a scheme application set and
+    !sets the application days in julian days referenced to 1/1/1900 and puts them in application_date array
+    ! Application_date is the entire
+    use utilities_1
+    use constants_and_Variables, ONLY:num_applications_input,pest_app_method_in,DEPI_in,application_rate_in,APPEFF_in, &
+        Tband_top_in,drift_value,lag_app_in,repeat_app_in, first_year, last_year,  &
+        application_date_original,application_date, pest_app_method,DEPI,TAPP,APPEFF,Tband_top, &
+        num_crop_periods_input, emm, emd, mam,mad, ham,had, &
+        total_applications , drift_kg_per_m2, cam123_soil_depth, delx, &
+        days_until_applied,app_reference_point, application_order, is_adjust_for_rain, is_absolute_year
+
+    use TPEZ_spray_initialization, ONLY: tpez_drift_kg_per_m2
+    use clock_variables
+
+    implicit none
+    INTEGER :: i, j, mcrop,crop_iterations
+    INTEGER :: app_counter
+    INTEGER :: MONTH,DAY
+    INTEGER :: YEAR_out,MONTH_out,DAY_out
+
+    ! (actual total apps may be less if simulation starts late in the of stops early) but that does not matter to the program,  also because of lag and periodicity
+
+    total_applications = (last_year - first_year + 1)*num_applications_input*num_crop_periods_input
+
+    allocate (application_date(total_applications))
+    allocate (application_order(total_applications))
+    allocate (application_date_original(total_applications))
+
+    allocate (pest_app_method(total_applications))
+    allocate (DEPI(total_applications))
+    allocate (TAPP(total_applications))
+    allocate (APPEFF(total_applications))
+    allocate (Tband_top(total_applications))
+    allocate (drift_kg_per_m2(total_applications))
+
+
+    allocate (tpez_drift_kg_per_m2(total_applications))
+
+
+    !initialize application date to very high (unlikely julian app date).
+    !Because allocated array may be larger than the actual number of applications (i.e. i used a simple counting scheme)
+    application_date = 100000000
+    pest_app_method = 1
+    DEPI = 0.0
+    TAPP= 0.0
+    APPEFF= 0.0
+    Tband_top= 0.0
+    drift_kg_per_m2 = 0.0
+
+    if (app_reference_point== 0) THEN
+        crop_iterations = 1
+    else
+        crop_iterations = num_crop_periods_input
+    END IF
+
+
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !First Loop is Crop Iterations, for absolute dates there is only one iteration
+    app_counter=0
+    do mcrop = 1, crop_iterations
+        !first get  the month and day of the REALtive reference (years will be tacked on later)
+        select case (app_reference_point)
+        case (0) !absolute
+            month = 1
+            day = 1
+        case (1) !relative to emergenge
+            month = emm(mcrop)
+            day = emd(mcrop)
+        case (2) !relative to maturity
+            month = mam(mcrop)
+            day = mad(mcrop)
+        case (3) !relative to harvest
+            month = ham(mcrop)
+            day = had(mcrop)
+        end select
+
+        !The following does not put apps in chrono order, rather by app number, THEN chrono.
+        ! this is because each app may be lagged and stepped independent of others
+        !For rain fast option, will need chrono order.
+        do i=1, num_applications_input
+
+            if (is_absolute_year(i)) THEN
+                app_counter = app_counter+1  !this allows both absolute years AND cycle years to be used
+                application_date(app_counter)=   days_until_applied(i) !for absolute years the actual julian is held here
+
+                pest_app_method(app_counter) = pest_app_method_in(i)
+                DEPI(app_counter) =  DEPI_in(i)
+                select case(pest_app_method(app_counter))
+                case(1:2)  !these are the only default depths and set to 4 cm
+                    DEPI(app_counter) = cam123_soil_depth  !default for general unspecified applications
+                case(3:10)
+                    If (DEPI(app_counter) < delx(1)) THEN
+                        DEPI(app_counter) = delx(1)
+                        WRITE (*,*) 'Note: Specified depth is less than compartment size, so used minimum incorporation = ', Delx(1)
+                    END IF
+                end select
+
+                TAPP(app_counter) = application_rate_in(i)/1.0E5  !     TAPP... kg/ha ---> g/cm**2
+                APPEFF(app_counter) = APPEFF_in(i)
+
+                Tband_top(app_counter) = Tband_top_in(i)
+
+
+                drift_kg_per_m2(app_counter) = drift_value(i)*application_rate_in(i)/10000.    !Kg/m2 drift application to waterbody
+                !  call get_date (application_date(app_counter), YEAR_out,MONTH_out,DAY_out)
+
+
+            else
+                do j = first_year +lag_app_in(i) , last_year, repeat_app_in(i)
+
+                    app_counter = app_counter+1
+
+                    application_date(app_counter)=   jd(j,month,day) + days_until_applied(i)
+                    pest_app_method(app_counter) = pest_app_method_in(i)
+                    DEPI(app_counter) =  DEPI_in(i)
+                    !make some Depth corrections if necessary
+
+                    select case(pest_app_method(app_counter))
+                    case(1:2)  !these are the only default depths and set to 4 cm
+                        DEPI(app_counter) = cam123_soil_depth  !default for general unspecified applications
+                    case(3:10)
+                        If (DEPI(app_counter) < delx(1)) THEN
+                            DEPI(app_counter) = delx(1)
+                            WRITE (*,*) 'Note: Specified depth is less than compartment size, so used minimum incorporation = ', Delx(1)
+                        END IF
+                    end select
+
+                    TAPP(app_counter) = application_rate_in(i)/1.0E5  !     TAPP... kg/ha ---> g/cm**2
+                    APPEFF(app_counter) = APPEFF_in(i)
+                    Tband_top(app_counter) = Tband_top_in(i)
+                    drift_kg_per_m2(app_counter) = drift_value(i)*application_rate_in(i)/10000.    !Kg/m2 drift application to waterbody
+
+                END DO
+            endif  !absolute years vs. yearly cycle
+
+        end  do
+    END DO
+
+
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+    application_date_original = application_date  !keep application_date_original the same for every scheme
+
+    !Put applications in chronLOGICAL order for use with rain-fast option. its not necessary to do this for normal runs,
+
+    !this is a time consuming operation, lets bypass unless rainfast is checked
+
+
+    if (is_adjust_for_rain) THEN
+        WRITE(*,*) "Put applications in order for rain restrictions?", is_adjust_for_rain
+        WRITE(*,*) "To developer:"
+        WRITE(*,*) "For rain restrictions, the program uses a sort routine that is very slow."
+        WRITE(*,*) "Consider modifications, Or require user to input applications in chrono order"
+        WRITE(*,*) "to avoid sorting requirement"
+
+        WRITE (*,*) '###################################################'
+        CALL CPU_TIME (time_1)
+        WRITE (*,*) 'cpu time before ordering applications (if applicable)  ',time_1- cputime_begin
+        WRITE (*,*) '###################################################'
+
+        !potentially very TIME CONSUMING!!!!
+
+        application_order = get_order(application_date)
+        application_date = application_date(application_order)
+        pest_app_method  = pest_app_method (application_order)
+        DEPI             = DEPI            (application_order)
+        TAPP             = TAPP            (application_order)
+        APPEFF           = APPEFF          (application_order)
+        Tband_top        = Tband_top       (application_order)
+        drift_kg_per_m2  = drift_kg_per_m2 (application_order)
+
+        WRITE (*,*) '###################################################'
+        CALL CPU_TIME (time_1)
+        WRITE (*,*) 'cpu time after ordering applications (if applicable)  ',time_1- cputime_begin
+        WRITE (*,*) '###################################################'
+    END IF
+
+    !not sure about this, check it it seems to alter the original
+    application_date_original = application_date  !keep application_date_original the same for every scheme
+
+    end subroutine SetupApplications
+
+    !**********************************************************************
+    subroutine setup_crops
+    !converts days and months to julia
+    !emergence date, maturity_date, harvest_date are all since 1-1-1900
+
+    use constants_and_Variables, ONLY: emd, emm, mad, mam, had, ham, num_crop_periods_input, &
+        first_year, last_year,num_years, crop_lag, crop_periodicity, emergence_date, maturity_date, harvest_date
+
+    use utilities_1
+    implicit none
+
+    INTEGER :: i,j,k
+    INTEGER :: maturity_year, harvest_year !local hold for year that maturity or harvest occurs, which may differ from emergence
+
+    INTEGER ::   yr_tracker
+
+    !  total_crop_periods=0
+    !do i=1, num_crop_periods_input
+    !   total_crop_periods = total_crop_periods+((last_year- first_year)- crop_lag(i) + crop_periodicity(i))/crop_periodicity(i)
+    !END DO
+
+    ! WRITE (echofileunit, *) 'Calculated Total Actual Crop Periods =', total_crop_periods
+
+    allocate (emergence_date (num_crop_periods_input, num_years))
+    allocate (maturity_date  (num_crop_periods_input, num_years))
+    allocate (harvest_date   (num_crop_periods_input, num_years))
+
+
+    emergence_date =-7777 !arbitrary unlikely value to ever interfere with simulation if array has some unused spaces
+    maturity_date  =-7777
+    harvest_date   =-7777
+
+
+    k=0 !index for crop dates
+    do i=1, num_crop_periods_input
+        yr_tracker = 0  !count tracker for years
+        do j = first_year + crop_lag(i) , last_year, crop_periodicity(i)
+            yr_tracker= yr_tracker+1
+            k=k+1
+            emergence_date(i,yr_tracker) = jd (j,emm(i),emd(i))
+
+            !maturity might cross over to another caLENdar year, but it must occur after emergence
+            maturity_year = j  !first assume that maturity occurs on same caLENdar year j
+            maturity_date(i,yr_tracker)  = jd (maturity_year ,mam(i),mad(i))
+            if (emergence_date(i,yr_tracker) > maturity_date(i,yr_tracker))THEN
+                maturity_year = j+1
+                maturity_date(i,yr_tracker)  = jd (maturity_year,mam(i),mad(i))
+            END IF
+
+            harvest_year = maturity_year !first assume that harvestoccurs on same caLENdar year as maturity
+            harvest_date(i,yr_tracker) = jd (harvest_year,ham(i),had(i))
+
+            !harvest might cross over to another caLENdar year, but it must occur after maturity
+            if (maturity_date(i,yr_tracker) > harvest_date(i,yr_tracker))THEN
+                harvest_year = maturity_year + 1
+                harvest_date(i,yr_tracker)  = jd (harvest_year,ham(i),had(i))
+            END IF
+        END DO
+    END DO
+
+
+
+    end subroutine setup_crops
+
+    !#######################################################################
+    !  subroutine name_output_files
+    !    use constants_and_variables, ONLY: maxFileLENgth, TimeSeriesUnit, working_directory,run_id,family_name,waterbody_id, &
+    !        outputfile_parent_daily,outputfile_deg1_daily,outputfile_deg2_daily, &
+    !        outputfile_parent_analysis,outputfile_deg1_analysis,outputfile_deg2_analysis
+    !    use Output_From_Field
+    !    implicit none
+    !    CHARACTER(LEN = maxFileLENgth) :: fiLEName
+    !
+    !    fiLEName = trim(working_directory) // trim(family_name) // "_" // trim(run_id) // ".zts"
+    !    OPEN(Unit=TimeSeriesUnit,FILE=trim(adjustl(fiLEName)), STATUS='UNKNOWN')
+    !    call WRITE_outputfile_header
+    !
+    !    WRITE(*,*) 'READ and open Time Series: ' //  trim(fiLEName)
+    !
+    !
+    !    outputfile_parent_daily = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) //  "_Parent_daily.csv"
+    !    outputfile_deg1_daily   = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) //  "_Degradate1_daily.csv"
+    !    outputfile_deg2_daily   = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) //  "_Degradate2_daily.csv"
+    !
+    !    outputfile_parent_analysis = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) // "_Parent.txt"
+    !    outputfile_deg1_analysis   = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) // "_deg1.txt"
+    !    outputfile_deg2_analysis   = trim(working_directory) // trim(family_name) // "_" // trim(run_id) //trim(waterbody_id ) // "_deg2.txt"
+    !
+    !    !outputfile_parent_deem    = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Parent_DEEM.rdf"
+    !    !outputfile_deg1_deem      = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Degradate1_DEEM.rdf"
+    !    !outputfile_deg2_deem      = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Degradate2_DEEM.rdf"
+    !    !
+    !    !outputfile_parent_caLENdex  = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Parent_CaLENdex.rdf"
+    !    !outputfile_deg1_caLENdex    = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Degradate1_CaLENdex.rdf"
+    !    !outputfile_deg2_caLENdex    = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) // "_Degradate2_CaLENdex.rdf"
+    !    !
+    !    !outputfile_parent_esa   = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) //  "_" & Trim(ReturnFrequency) & "_Parent.txt"
+    !    !outputfile_deg1_esa     = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) //  "_" & Trim(ReturnFrequency) & "_Degradate1.txt"
+    !    !outputfile_deg2_esa     = trim(working_directory) // trim(family_name) // "_" // trim(scenario_id) //trim(waterbody_id ) //  "_" & Trim(ReturnFrequency) & "_Degradate2.txt"
+    !    !
+    !end subroutine name_output_files
+
+    !######################################################################################
+    subroutine SetupFieldOutputOptions()
+    use utilities_1
+    use constants_and_variables, ONLY:     is_runoff_output, is_erosion_output, is_runoff_chem_output, is_erosion_chem_output , &
+        is_conc_bottom_output,is_daily_volatilized_output,is_daily_chem_leached_output, &
+        is_chem_decayed_part_of_soil_output, decay_start, decay_end, &
+        is_chem_in_part_soil_output, fieldmass_start, fieldmass_end,is_chem_on_foliage_output , is_precipitation_output , &
+        is_evapotranspiration_output, is_soil_water_output, is_irrigation_output,is_chem_in_all_soil_output, &
+        is_infiltration_at_depth_output,infiltration_point,is_infiltrated_bottom_output,infiltration_point,is_infiltrated_bottom_output, &
+        PLNAME, chem_id, mode, arg, arg2, const, nplots, thickness, ncom2,soil_depth,nhoriz,leachdepth, &
+        extra_plots, temp_PLNAME,  temp_chem_id, temp_MODE,temp_ARG,temp_ARG2,temp_CONST, nchem, &
+        profile_thick, profile_number_increments, is_auto_profile, number_of_discrete_layers, is_gw_btc, maxcap_volume,retardation_factor
+
+
+    implicit none
+    INTEGER :: i, j
+    REAL :: depth1 !local variables used to determine reklevant depths for output in last horizon, and possibly elsewher
+    REAL :: depth2
+    INTEGER :: num_std_plots  !counter for the number of standard plots that were requested
+    !("extra plots" as in the variables module are those that the user specified with the traditional przm nomenclature)
+
+
+    i=0
+    if (is_runoff_output) THEN
+        i=i+1
+        PLNAME(i) = 'RUNF'
+        chem_id(I) = 1
+        MODE(i) = 'TSER'
+        ARG(i) = 0
+        ARG2(i) = 0
+        CONST(i) = 1.0
+    END IF
+
+    if (is_erosion_output) THEN
+        i=i+1
+        PLNAME(i) = 'ESLS'
+        chem_id(I) = 1
+        MODE(i) = 'TSER'
+        ARG(i) = 0
+        ARG2(i) = 0
+        CONST(i) = 1.0
+    END IF
+
+
+    if (is_precipitation_output) THEN
+        i=i+1
+        PLNAME(i) = 'PRCP'
+        chem_id(i) = 1
+        MODE(i) = 'TSER'
+        ARG(i) = 1
+        ARG2(i) = 2
+        CONST(i) = 1.
+    END IF
+
+    if (is_evapotranspiration_output) THEN
+        i=i+1
+        PLNAME(i) = 'TETD'
+        chem_id(i) = 1
+        MODE(i) = 'TSER'
+        ARG(i) = 1
+        ARG2(i) = 2
+        CONST(i) = 1.
+    END IF
+
+    if (is_soil_water_output) THEN
+        i=i+1
+        PLNAME(i) = 'SWTR'
+        chem_id(i) = 1
+        MODE(i) = 'TSUM'
+
+        ARG(i) = 1
+
+        if(is_auto_profile) THEN
+            depth2 = sum(profile_thick)
+        else
+            depth2 = sum(thickness)
+        END IF
+
+        ARG2(i) = find_depth_node(ncom2,soil_depth,depth2)
+        CONST(i) = 1.
+
+    END IF
+
+
+    if (is_irrigation_output) THEN
+        i=i+1
+        PLNAME(i) = 'IRRG'
+        chem_id(i) = 1
+        MODE(i) = 'TSER'
+        ARG(i) = 1
+        ARG2(i) = 2
+        CONST(i) = 1.
+    END IF
+
+    if (is_infiltration_at_depth_output) THEN
+        i=i+1
+        PLNAME(i) = 'INFL'
+        chem_id(i) = 1
+        MODE(i) = 'TSER'
+
+        ARG(i)  = find_depth_node(ncom2,soil_depth,infiltration_point)
+        ARG2(i) = 0
+        CONST(i) = 1.
+    END IF
+
+    if (is_infiltrated_bottom_output) THEN
+        i=i+1
+        PLNAME(i) = 'INFB'
+        chem_id(i) = 1
+        MODE(i) = 'TSER'
+
+        ARG(i) = ncom2  !always at the bottom node
+        ARG2(i) = 2     !should be a dummy right?
+        CONST(i) = 1.
+    END IF
+
+
+
+
+
+
+
+
+    !Below are the chemical outputs, need to get parent and degradates
+    do j=1, nchem
+        if (is_runoff_chem_output) THEN
+            i=i+1
+            PLNAME(i) = 'RFLX'
+            chem_id(I) = j
+            MODE(i) = 'TSER'
+            ARG(i) = 0
+            ARG2(i) = 0
+            CONST(i) = 100000.  !kg/ha
+        END IF
+
+        if (is_erosion_chem_output) THEN
+            i=i+1
+            PLNAME(i) = 'EFLX'
+            chem_id(I) = j
+            MODE(i) = 'TSER'
+            ARG(i) = 0
+            ARG2(i) = 0
+            CONST(i) = 100000.
+        END IF
+
+        if (is_conc_bottom_output) THEN
+            !this should be average concentration in aquifer which is assumed to be last layer in autodiscretization
+            i=i+1
+            PLNAME(i) = 'DCON'
+            chem_id(I) = j
+            MODE(i) = 'TAVE'
+
+            if(is_auto_profile) THEN
+                arg(i)  = ncom2-profile_number_increments(number_of_discrete_layers)+1
+                ARG2(i) = ncom2
+            else
+                depth1 = sum(thickness(1:(nhoriz-1)) )     !top of last horizon
+                depth2 = sum(thickness)
+                ARG(i)  = find_depth_node(ncom2,soil_depth,depth1)
+                If (Arg(i) > 1) THEN    !Forthe unusual case where the last node is the first node
+                    ARG(i)  = ARG(i) +1 !need to add node because depth is countedat bottom of node
+                END IF
+                ARG2(i) = find_depth_node(ncom2,soil_depth,depth2)
+            END IF
+            CONST(i) = 1000.
+        END IF
+
+        if (is_daily_volatilized_output) THEN
+            i=i+1
+            PLNAME(i) = 'VFLX'
+            chem_id(I) = j
+            MODE(i) = 'TSER'
+            ARG(i) = 0
+            ARG2(i) = 0
+            CONST(i) = 100000. !kg/ha
+        END IF
+
+        if (is_daily_chem_leached_output) THEN
+            i=i+1
+            PLNAME(i) = 'COFX'
+            chem_id(i) = j
+            MODE(i) = 'TSER'
+
+            ARG(i)  = find_depth_node(ncom2,soil_depth,leachdepth)
+            ARG2(i) = 0
+            CONST(i) = 100000. !kg/ha
+        END IF
+
+        if (is_chem_decayed_part_of_soil_output) THEN
+            i=i+1
+            PLNAME(i) = 'DKFX'
+            chem_id(I) = j
+            MODE(i) = 'TSUM'
+
+            ARG(i)  = find_depth_node(ncom2,soil_depth,decay_start)
+            !because depth is determined at bottom of compartment need to add 1 (except fdor case of 1, where find_node alREADy considers this)
+            If (Arg(i) > 1) THEN
+                ARG(i)  = ARG(i) +1
+            END IF
+            ARG2(i) = find_depth_node(ncom2,soil_depth,decay_end)
+            CONST(i) = 100000. !kg/ha
+        END IF
+
+        if (is_chem_in_part_soil_output) THEN
+            i=i+1
+            PLNAME(i) = 'TPST'
+            chem_id(i) = j
+            MODE(i) = 'TSUM'
+
+            ARG(i)  = find_depth_node(ncom2,soil_depth,fieldmass_start)
+            !because depth is determined at bottom of compartment need to add 1 (except fdor case of 1, where find_node alREADy considers this)
+            If (Arg(i) > 1) THEN
+                ARG(i)  = ARG(i) +1
+            END IF
+
+            ARG2(i) = find_depth_node(ncom2,soil_depth, fieldmass_end )
+
+            CONST(i) = 100000. !kg/ha
+        END IF
+
+        if (is_chem_in_all_soil_output) THEN
+            i=i+1
+            PLNAME(i) = 'TPST'
+            chem_id(i) = j
+            MODE(i) = 'TSUM'
+            ARG(i) = 1
+            depth2 = sum(thickness)
+            ARG2(i) = find_depth_node(ncom2,soil_depth,depth2)
+            CONST(i) = 100000. !kg/ha
+        END IF
+
+        if (is_chem_on_foliage_output ) THEN
+            i=i+1
+            PLNAME(i) = 'FPST'
+            chem_id(i) = j
+            MODE(i) = 'TSER'
+            ARG(i) = 1
+            ARG2(i) = 2
+            CONST(i) = 100000. !kg/ha
+        END IF
+    END DO
+
+
+
+    !special groundwater breakjthrough curve section (parent only)
+
+    if (is_gw_btc) THEN
+        i=i+1
+        WRITE(*,*) maxcap_volume,retardation_factor(1)
+        !Pore Volumes
+        PLNAME(i) = 'PVOL'
+        chem_id(i) = 1
+        MODE(i) = 'TCUM'
+        ARG(i) = ncom2  !always at the bottom node
+        ARG2(i) = 2     !dummy
+        CONST(i) = 1./maxcap_volume
+
+        !Throughputs
+        i=i+1
+        PLNAME(i) = 'TPUT'
+        chem_id(i) = 1
+        MODE(i) = 'TCUM'
+        ARG(i) = ncom2  !always at the bottom node
+        ARG2(i) = 2     !dummy
+        CONST(i) = 1./maxcap_volume/retardation_factor(1)
+
+        !Concentration
+        i=i+1
+        PLNAME(i) = 'AQFR'
+        chem_id(I) = 1
+        MODE(i) = 'TAVE'
+
+        if(is_auto_profile) THEN
+            arg(i)  = ncom2-profile_number_increments(number_of_discrete_layers)+1
+            ARG2(i) = ncom2
+        else
+            depth1 = sum(thickness(1:(nhoriz-1)) )     !top of last horizon
+            depth2 = sum(thickness)
+            ARG(i)  = find_depth_node(ncom2,soil_depth,depth1)
+            If (Arg(i) > 1) THEN    !Forthe unusual case where the last node is the first node
+                ARG(i)  = ARG(i) +1 !need to add node because depth is countedat bottom of node
+            END IF
+            ARG2(i) = find_depth_node(ncom2,soil_depth,depth2)
+        END IF
+        CONST(i) = 1000.
+
+    END IF
+
+
+    num_std_plots= i
+
+    do i =  1, extra_plots
+        PLNAME(num_std_plots +i)  = temp_PLNAME(i)
+        chem_id(num_std_plots +i) = temp_chem_id(i)
+        MODE(num_std_plots +i)    = temp_MODE(i)
+        ARG(num_std_plots +i)     = temp_ARG(i)
+        ARG2(num_std_plots +i)    = temp_ARG2(i)
+        CONST(num_std_plots +i)   = temp_CONST(i)
+    END DO
+
+    NPLOTS= num_std_plots + extra_plots
+
+    end subroutine SetupFieldOutputOptions
+
+
+    subroutine Calculate_Retardation_Factor
+    use constants_and_variables, ONLY: ncom2, delx, theta_fc, bulkdensity, Kd_new,retardation_factor,maxcap_volume , nchem
+    implicit none
+
+    REAL :: total_depth
+    INTEGER ::i, k
+
+    !REAL :: r_zone, t_depth
+
+
+    do k = 1, nchem
+        total_depth = sum(delx)
+        retardation_factor(k) = 0.0
+        do i = 1, ncom2
+
+            retardation_factor(k) = retardation_factor(k) + delx(i) /total_depth*	(theta_fc(i) +bulkdensity(i)*kd_new(k, i))/theta_fc(i)
+        END DO
+    END DO
+
+    !!retardation in standard degradation zone
+    !r_zone = 0.0
+    !t_depth = sum(delx(1:43))
+    !do i = 1, 43
+    !
+    !                   WRITE(*,*) theta_fc(i), bulkdensity(i), kd_new(k, i)
+    !	          	r_zone = r_zone + delx(i) /t_depth*	(theta_fc(i) +bulkdensity(i)*kd_new(k, i))/theta_fc(i)
+    ! END DO
+    ! WRITE(*,*) "deg zone R = ", r_zone
+
+
+    maxcap_volume = 0.0
+    do i = 1, ncom2
+        maxcap_volume = maxcap_volume + theta_fc(i) * delx(i)
+    END DO
+    end subroutine Calculate_Retardation_Factor
+
+
+
+    subroutine  reset_initial_masses
+    use constants_and_variables, ONLY:conc_total_per_water, mass_in_compartment, conc_porewater,mass_in_compartment2,&
+        soil_applied_washoff, sorbed2, &
+        hold_precip,hold_irrig,hold_runoff
+
+    conc_total_per_water= 0.0
+    mass_in_compartment = 0.0
+    mass_in_compartment2 = 0.0
+    conc_porewater = 0.0
+    soil_applied_washoff=0.0
+    Sorbed2 = 0.0
+
+    !cummulatives for research:
+    hold_precip = 0.0
+    hold_irrig = 0.0
+    hold_runoff= 0.0
+
+    end  subroutine  reset_initial_masses
+
+
+
+
+    end module initialization
