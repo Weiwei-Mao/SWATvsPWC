@@ -72,8 +72,7 @@ style: |
 
 **Water Body (VVWM):**
 - Degradation, volatilization
-- Settling, resuspension
-- Benthic processes
+- Benthic processes (no resuspension)
 
 </div>
 
@@ -121,7 +120,7 @@ style: |
 
 - **Foliar** (LAI-based interception)
 - **Soil surface**
-- **Soil incorporation** (uniform mixing)
+- **Soil incorporation** (uniform mixing to specified depth)
 
 </div>
 
@@ -139,7 +138,7 @@ style: |
 
 - **Volatilization**: Canopy resistance model (Henry's Law + boundary layer)
 - **Sorption**: Linear + Freundlich; optional non-equilibrium
-- **Numerical**: Predictor-corrector; sub-daily time steps; tridiagonal solver
+- **Numerical**: Sub-daily time steps; tridiagonal solver
 
 </div>
 
@@ -149,7 +148,7 @@ style: |
 
 - **Volatilization**: Simplified aquatic flux
 - **Sorption**: Linear only (equilibrium assumption)
-- **Numerical**: Explicit Euler; daily time steps; 1st-order decay
+- **Numerical**: Daily time steps
 
 </div>
 
@@ -163,9 +162,13 @@ style: |
 
 <span class="col-title">PWC Output</span>
 
-- **Field scale**: Daily fluxes for runoff, erosion, volatilization, degradation, washoff, plant uptake
-- **Water body**: Estimated Environmental Concentration (EEC)
-- **Purpose**: Regulatory risk assessment
+**Field (PRZM/TPEZ):**
+- Daily fluxes: runoff, erosion, volatilization, degradation, drift, washoff
+- Bottom outflow
+
+**Water Body (VVWM):**
+- Water concentration
+- Benthic concentration
 
 </div>
 
@@ -173,9 +176,13 @@ style: |
 
 <span class="col-title">SWAT+ Output</span>
 
-- **HRU scale**: Mass balance for plant, soil, sediment, runoff, lateral flow, tile drain, percolation
-- **Channel scale**: Dissolved/sorbed transport, reaction, metabolism, volatilization, settling
-- **Purpose**: Watershed management analysis
+**HRU:**
+- Mass balance: plant, soil, sediment
+- Transport: runoff, lateral flow, tile drain, percolation
+
+**Channel:**
+- Dissolved/sorbed transport
+- Reaction, metabolism, volatilization, settling
 
 </div>
 
