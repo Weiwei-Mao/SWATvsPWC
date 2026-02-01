@@ -50,7 +50,7 @@ style: |
 
 - **Chemicals**: Multiple pesticides simultaneously
 - **Metabolite transport**: Full (volatilization, sorption, runoff, leaching, erosion, plant uptake)
-- **Evolution**: Classic SWAT (parent only) → SWAT+ (metabolites ~2020) → 2025 plant uptake
+- **Evolution**: Classic SWAT (parent only) → SWAT+ metabolites (Rathjens et al., 2022) → plant uptake (Rathjens et al., 2025)
 
 </div>
 
@@ -67,7 +67,7 @@ style: |
 **Field (PRZM/TPEZ):**
 - Sorption (Linear + Freundlich)
 - Degradation (3-phase: aqueous/sorbed/gaseous)
-- Volatilization (complete model)
+- Volatilization (canopy resistance model)
 - Transport: Runoff, erosion, leaching, plant uptake
 
 **Water Body (VVWM):**
@@ -137,9 +137,9 @@ style: |
 
 <span class="col-title">PWC: Algorithm Detail</span>
 
-- **Volatilization**: Complete canopy resistance model (Henry's Law + boundary layer)
-- **Sorption**: Linear + Freundlich + non-equilibrium (predictor-corrector)
-- **Numerical**: Predictor-corrector, sub-daily time steps, tridiagonal matrix solver
+- **Volatilization**: Canopy resistance model (Henry's Law + boundary layer)
+- **Sorption**: Linear + Freundlich; optional non-equilibrium
+- **Numerical**: Predictor-corrector; sub-daily time steps; tridiagonal solver
 
 </div>
 
@@ -147,9 +147,9 @@ style: |
 
 <span class="col-title">SWAT+: Algorithm Detail</span>
 
-- **Volatilization**: Simplified aquatic flux only (no canopy model)
+- **Volatilization**: Simplified aquatic flux
 - **Sorption**: Linear only (equilibrium assumption)
-- **Numerical**: Explicit Euler, daily time steps, 1st-order decay simplification
+- **Numerical**: Explicit Euler; daily time steps; 1st-order decay
 
 </div>
 
@@ -212,7 +212,7 @@ Note: ✓ = Excellent, △ = Limited, ✗ = Not supported
 
 - **Chemicals**: 1 parent + 2 metabolites
 - **Scale**: Single point (field)
-- **Volatilization**: Complete canopy resistance model
+- **Volatilization**: Canopy resistance model
 - **Sorption**: Linear + nonlinear (Freundlich)
 - **Degradation**: Three-phase (aqueous/sorbed/gaseous)
 - **Application**: 8 methods
@@ -227,7 +227,7 @@ Note: ✓ = Excellent, △ = Limited, ✗ = Not supported
 
 - **Chemicals**: Multiple pesticides
 - **Scale**: Distributed (watershed/HRU)
-- **Volatilization**: Simplified aquatic flux only
+- **Volatilization**: Simplified aquatic flux
 - **Sorption**: Linear only
 - **Degradation**: Single-phase
 - **Application**: 3 methods
@@ -240,11 +240,14 @@ Note: ✓ = Excellent, △ = Limited, ✗ = Not supported
 
 ---
 
+# References
+
+1. Rathjens, H., Kiesel, J., Miguez, M.B., Winchell, M., Arnold, J.G., Sur, R. (2022). Simulation of Pesticide and Metabolite Concentrations Using SWAT+ Landscape Routing and Conditional Management Applications. Water 14(9):1332. doi:10.3390/w14091332
+2. Rathjens, H., Kiesel, J., Arnold, J., Reinken, G., Sur, R. (2025). Technical note: Extending the SWAT2012 and SWAT+ models to simulate pesticide plant uptake processes. Hydrol. Earth Syst. Sci. 29:6703–6714. doi:10.5194/hess-29-6703-2025
+
 <!-- _paginate: false -->
 <!-- _footer: "" -->
 
 # Thank You!
 
 <br>
-
-

@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-**最终目标**: 基于源代码分析，制作一份对比 SWAT+ 和 PWC 农药运移模型的演示文稿（PPT）
+**最终目标**: 基于源代码分析，制作一份对比 SWAT+ 和 PWC 农药运移模型的演示文稿（PPT）.PPT使用Warp创建。
 
 本项目旨在对比分析两个农业农药运移计算模型：
 - **SWAT+** (Soil and Water Assessment Tool Plus) - USDA-ARS和Texas A&M AgriLife Research联合开发的开源流域尺度模型
@@ -166,7 +166,7 @@ SWATvsPWC/
 **演示文稿**: [SWAT+ vs PWC 对比演示文稿](comparison/docs/swat_vs_pwc_presentation.md) - **项目核心目标**
 - 基于源代码分析的模型对比PPT
 - 涵盖模型概述、代谢产物模拟、物理过程、施用方法、挥发/吸附/数值方法、输出对比、场景对比等
-- 使用 Marp 格式，支持导出为 PDF
+- 使用 Marp 格式（基于 Warp 模板构建），支持导出为 PDF
 
 ### 已完成的文档
 
